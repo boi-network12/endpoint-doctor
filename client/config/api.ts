@@ -1,4 +1,7 @@
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
+// real endpoint: https://endpoint-doctor.pxxl.click
+// fake endpoint: http://localhost:5000
+
+const API_BASE_URL = 'https://endpoint-doctor.pxxl.click/api';
 
 export const api = {
   analyze: {
