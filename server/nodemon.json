@@ -1,0 +1,18 @@
+{
+    "watch": [
+        "src",
+        "index.ts"
+    ],
+    "ignore": [
+        "temp/*",
+        "node_modules",
+        "dist/*",
+        "*.test.ts",
+        "*.spec.ts",
+        "lighthouse-reports"
+    ],
+    "ext": "ts,js,json",
+    "exec": "ts-node index.ts",
+    "delay": 1000,
+    "verbose": false
+}

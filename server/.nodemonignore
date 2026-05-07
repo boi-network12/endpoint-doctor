@@ -1,0 +1,5 @@
+temp/
+lighthouse-reports/
+*.log
+dist/
+node_modules/
