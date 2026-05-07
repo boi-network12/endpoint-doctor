@@ -12,7 +12,7 @@ import notFoundMiddleware from "./src/middlewares/notfound.middleware";
 const app = express();
 
 const corsOption = {
-  origin: ["http://localhost:3000", "http://localhost:3001"],
+  origin: ["http://localhost:3000", "http://localhost:3001", "https://endpoint-doctor.pxxl.click"],
   credentials: true,
   optionsSuccessStatus: 200,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],

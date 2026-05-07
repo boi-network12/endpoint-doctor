@@ -2,6 +2,8 @@
 
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 html {
   scroll-behavior: smooth;
 }
@@ -33,6 +35,6 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgb(34 211 238 / 0.4);
+  /* background: rgb(34 211 238 / 0.4); */
   border-radius: 999px;
 }

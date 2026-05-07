@@ -1,7 +1,7 @@
 // real endpoint: https://endpoint-doctor.pxxl.click
 // fake endpoint: http://localhost:5000
 
-const API_BASE_URL = 'https://endpoint-doctor.pxxl.click/api';
+const API_BASE_URL = 'http://localhost:5000/api';
 
 export const api = {
   analyze: {

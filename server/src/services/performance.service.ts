@@ -24,32 +24,23 @@ export const runFrontendAnalysis = async (url: string) => {
   let chrome: any = null;
   let browser: puppeteer.Browser | null = null;
 
-  // Create a more reliable temp directory structure for Windows
-  const projectRoot = process.cwd();
-  const customTempDir = path.join(projectRoot, 'temp', 'lighthouse-endpoint-doctor');
+  // Use os.tmpdir() for better cross-platform compatibility
+  const timestamp = Date.now();
+  const randomId = Math.random().toString(36).substring(7);
+  const customTempDir = path.join(os.tmpdir(), `lighthouse-analysis-${timestamp}-${randomId}`);
   
-  // Ensure temp directory exists with proper permissions
+  // Ensure temp directory exists
   if (!fs.existsSync(customTempDir)) {
     fs.mkdirSync(customTempDir, { recursive: true });
   }
 
-  // Clear any existing content to avoid conflicts
-  try {
-    const files = fs.readdirSync(customTempDir);
-    for (const file of files) {
-      const filePath = path.join(customTempDir, file);
-      fs.rmSync(filePath, { recursive: true, force: true });
-    }
-  } catch (error) {
-    console.warn('Could not clear temp directory:', error);
-  }
-
+  // Set environment variables for temp directories
   process.env.TMPDIR = customTempDir;
   process.env.TEMP = customTempDir;
   process.env.TMP = customTempDir;
 
   try {
-    // Launch Chrome with Windows-specific flags
+    // Launch Chrome with Windows-optimized flags
     chrome = await chromeLauncher.launch({
       chromeFlags: [
         '--headless=new',
@@ -58,19 +49,28 @@ export const runFrontendAnalysis = async (url: string) => {
         '--disable-dev-shm-usage',
         '--disable-gpu',
         '--no-first-run',
-        '--disable-blink-features=AutomationControlled',
+        '--disable-background-networking',
+        '--no-default-browser-check',
+        '--disable-default-apps',
         '--disable-features=VizDisplayCompositor',
-        '--disable-software-rasterizer',
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-renderer-backgrounding',
+        '--disable-breakpad',
+        '--disable-sync',
+        '--disable-component-extensions-with-background-pages',
+        '--disable-extensions',
         '--disable-logging',
         '--log-level=3',
+        '--silent-debugger-extension-api',
+        '--disable-features=Translate,OptimizationHints,MediaRouter',
         `--user-data-dir=${path.join(customTempDir, 'chrome-profile')}`,
-        `--disk-cache-dir=${path.join(customTempDir, 'cache')}`,
-      ],    
+        '--disk-cache-dir=' + path.join(customTempDir, 'cache'),
+      ],
+      logLevel: 'error' as const,
     });
 
-    // Wait for Chrome to be fully ready
-    await new Promise(resolve => setTimeout(resolve, 2000));
-
+    // Connect puppeteer
     browser = await puppeteer.connect({
       browserURL: `http://localhost:${chrome.port}`,
       defaultViewport: null,
@@ -78,20 +78,22 @@ export const runFrontendAnalysis = async (url: string) => {
 
     const page = await browser.newPage();
 
-    // Set a longer timeout
+    // Set timeouts
     await page.setDefaultNavigationTimeout(60000);
     await page.setDefaultTimeout(60000);
-
     await page.setViewport({ width: 1920, height: 1080 });
 
+    // Set user agent
     await page.setUserAgent(
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36'
     );
 
+    // Remove webdriver flag
     await page.evaluateOnNewDocument(() => {
       Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
     });
 
+    // Track network requests
     const networkRequests: Array<{
       url: string;
       resourceType: string;
@@ -120,16 +122,16 @@ export const runFrontendAnalysis = async (url: string) => {
 
     console.log(`🚀 Analyzing: ${url}`);
 
-    // Navigate with better error handling
+    // Navigate to URL
     await page.goto(url, {
       waitUntil: 'networkidle2',
       timeout: 60000,
     });
 
-    // Wait a bit for dynamic content
+    // Wait for dynamic content
     await new Promise((resolve) => setTimeout(resolve, 3000));
 
-    // ==================== Page Metrics ====================
+    // Get page metrics
     const metrics = await page.evaluate(() => {
       const perfData = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming;
       const paintData = performance.getEntriesByType('paint');
@@ -154,7 +156,7 @@ export const runFrontendAnalysis = async (url: string) => {
     const htmlContent = await page.content();
     const htmlSize = Buffer.byteLength(htmlContent, 'utf8');
 
-    // ==================== Lighthouse ====================
+    // Run Lighthouse analysis (with error handling)
     let lighthouseMetrics = {
       performance: 0,
       accessibility: 0,
@@ -162,14 +164,13 @@ export const runFrontendAnalysis = async (url: string) => {
       seo: 0,
     };
 
-    // Try Lighthouse with better error handling for Windows
     try {
       const lighthouse = (await import('lighthouse')).default;
       
-      // Set a custom output directory for Lighthouse within project
-      const lighthouseOutputDir = path.join(customTempDir, 'lighthouse-reports');
-      if (!fs.existsSync(lighthouseOutputDir)) {
-        fs.mkdirSync(lighthouseOutputDir, { recursive: true });
+      // Create a custom report directory that won't conflict
+      const lighthouseReportDir = path.join(customTempDir, 'reports');
+      if (!fs.existsSync(lighthouseReportDir)) {
+        fs.mkdirSync(lighthouseReportDir, { recursive: true });
       }
 
       const flags = {
@@ -177,8 +178,8 @@ export const runFrontendAnalysis = async (url: string) => {
         output: 'json' as const,
         logLevel: 'error' as const,
         onlyCategories: ['performance', 'accessibility', 'best-practices', 'seo'],
-        // Don't write to disk to avoid permission issues
-        outputPath: false,
+        // Critical: Disable saving to disk to avoid permission issues
+        outputPath: false as any,
       };
 
       const config = {
@@ -191,10 +192,11 @@ export const runFrontendAnalysis = async (url: string) => {
             uploadThroughputKbps: 3072,
             rttMs: 40,
           },
-          // Critical for Windows: disable storage reset
           disableStorageReset: true,
-          // Disable saving traces and screenshots to avoid file writes
           skipAudits: ['screenshot-thumbnails', 'final-screenshot'],
+          // Prevent Lighthouse from creating files
+          disableDeviceScreenEmulation: false,
+          emulatedUserAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         },
       };
 
@@ -210,14 +212,13 @@ export const runFrontendAnalysis = async (url: string) => {
         };
       }
     } catch (lighthouseError: any) {
-      console.warn('Lighthouse failed (non-fatal):', lighthouseError.message || lighthouseError);
-      // Continue without Lighthouse data
+      console.warn('Lighthouse warning (continuing with basic metrics):', lighthouseError?.message || lighthouseError);
     }
 
-    // ==================== Issues Detection ====================
+    // Detect issues
     const issues: DetailedIssue[] = [];
 
-    // Your existing issue detection logic remains the same
+    // Load time issues
     if (metrics.loadTime > 8000 && metrics.loadTime !== 0) {
       issues.push({
         type: 'network',
@@ -231,6 +232,7 @@ export const runFrontendAnalysis = async (url: string) => {
       });
     }
 
+    // HTML size issues
     if (htmlSize > 1024 * 100) {
       const sizeKB = (htmlSize / 1024).toFixed(1);
       issues.push({
@@ -245,6 +247,7 @@ export const runFrontendAnalysis = async (url: string) => {
       });
     }
 
+    // Large images
     const largeImages = networkRequests
       .filter((r) => r.resourceType === 'image' && r.size > 500000)
       .sort((a, b) => b.size - a.size);
@@ -263,6 +266,7 @@ export const runFrontendAnalysis = async (url: string) => {
       });
     });
 
+    // Render blocking resources
     const renderBlockingCount = networkRequests.filter(
       (r) => (r.resourceType === 'stylesheet' || r.resourceType === 'script') && r.size > 50000
     ).length;
@@ -278,6 +282,7 @@ export const runFrontendAnalysis = async (url: string) => {
       });
     }
 
+    // Calculate score
     let performanceScore = 100;
     performanceScore -= issues.filter((i) => i.severity === 'critical').length * 15;
     performanceScore -= issues.filter((i) => i.severity === 'warning').length * 6;
@@ -285,7 +290,7 @@ export const runFrontendAnalysis = async (url: string) => {
 
     const loadTimeSeconds = metrics.loadTime > 0 ? metrics.loadTime / 1000 : 0;
 
-    return {
+    const result = {
       url,
       performanceScore: Math.round(performanceScore),
       lighthouseScore: Math.round(lighthouseMetrics.performance * 100),
@@ -309,6 +314,12 @@ export const runFrontendAnalysis = async (url: string) => {
       }),
       recommendations: generateRecommendations(issues),
     };
+
+    // Close page before cleanup
+    await page.close().catch(() => {});
+
+    return result;
+
   } catch (error: any) {
     console.error('Frontend Analysis Error:', error);
 
@@ -336,17 +347,106 @@ export const runFrontendAnalysis = async (url: string) => {
       recommendations: ['Check URL accessibility and try again'],
     };
   } finally {
-    if (browser) await browser.close().catch(() => {});
-    if (chrome) await chrome.kill().catch(() => {});
-    
-    // Clean up temp directory after analysis
-    try {
-      if (fs.existsSync(customTempDir)) {
-        fs.rmSync(customTempDir, { recursive: true, force: true });
-        console.log(`Cleaned up temp directory: ${customTempDir}`);
+    // Clean up in reverse order with proper error handling
+    if (browser) {
+      try { 
+        await browser.close(); 
+      } catch (e: any) {
+        if (!e.message?.includes('already closed')) {
+          console.warn('Browser close error:', e.message);
+        }
       }
-    } catch (cleanupError) {
-      console.warn('Failed to cleanup temp dir:', cleanupError);
+    }
+
+    if (chrome) {
+      try {
+        await chrome.kill();
+        // Windows needs extra time for file handle release
+        if (process.platform === 'win32') {
+          await new Promise(r => setTimeout(r, 2000));
+        }
+      } catch (e) {
+        console.warn('Error killing Chrome:', e);
+      }
+    }
+
+    // Wait a bit for processes to fully terminate
+    await new Promise(r => setTimeout(r, 1000));
+        
+      // Windows-specific cleanup with retry and force kill check
+      if (process.platform === 'win32') {
+        try {
+          // Force garbage collection of any lingering handles
+          global.gc && global.gc();
+          
+          // Use a more aggressive cleanup approach on Windows
+          const { exec } = require('child_process');
+          const util = require('util');
+          const execPromise = util.promisify(exec);
+          
+          // Use Windows command line to force delete
+          await execPromise(`rmdir /s /q "${customTempDir}" 2>nul`).catch(() => {});
+        } catch (cleanupError) {
+          console.warn('Windows cleanup fallback attempted');
+        }
+      }
+
+      // Clean up temporary directory with retry logic
+      let retries = 5;
+      let delay = 500;
+
+
+      while (retries > 0) {
+      try {
+        if (fs.existsSync(customTempDir)) {
+          // On Windows, try to delete individual files first
+          if (process.platform === 'win32') {
+            const files = fs.readdirSync(customTempDir);
+            for (const file of files) {
+              try {
+                const filePath = path.join(customTempDir, file);
+                if (fs.statSync(filePath).isDirectory()) {
+                  fs.rmSync(filePath, { recursive: true, force: true });
+                } else {
+                  fs.unlinkSync(filePath);
+                }
+              } catch (e) {
+                // Ignore individual file errors
+              }
+            }
+          }
+          
+          // Now try to delete the main directory
+          fs.rmSync(customTempDir, { 
+            recursive: true, 
+            force: true,
+            maxRetries: 3,
+            retryDelay: 300 
+          });
+        }
+        break;
+      } catch (cleanupError: any) {
+        retries--;
+        if (retries > 0) {
+          console.warn(`Cleanup retry (${retries} left):`, cleanupError.message);
+          await new Promise(r => setTimeout(r, delay));
+          delay *= 1.5; // Exponential backoff
+        } else {
+          // Mark for deletion on next boot if all else fails
+          if (process.platform === 'win32') {
+            try {
+              const { exec } = require('child_process');
+              const util = require('util');
+              const execPromise = util.promisify(exec);
+              await execPromise(`del /f /q "${customTempDir}"`);
+            } catch (finalError) {
+              console.warn('⚠️ Could not clean temp dir, will be cleaned on next reboot:', customTempDir);
+            }
+          } else {
+            console.warn('⚠️ Could not fully clean temp dir:', customTempDir);
+          }
+        }
+      }
     }
   }
 };
@@ -354,60 +454,41 @@ export const runFrontendAnalysis = async (url: string) => {
 function generateRecommendations(issues: DetailedIssue[]): string[] {
   const recs = new Set<string>();
 
+  // ALWAYS provide recommendations based on actual issues found
+  issues.forEach(issue => {
+    if (issue.severity === 'critical') {
+      recs.add(`⚠️ CRITICAL: ${issue.recommendation}`);
+    } else if (issue.severity === 'warning') {
+      recs.add(`📌 ${issue.recommendation}`);
+    }
+  });
+
+  // Add specific recommendations based on issue patterns
+  if (issues.some(i => i.message.includes('render-blocking'))) {
+    recs.add('🚀 Defer non-critical JavaScript and CSS to improve FCP');
+  }
+  
   if (issues.some(i => i.type === 'image')) {
-    recs.add('Optimize images with WebP/AVIF and compression');
-    recs.add('Implement lazy loading for images below the fold');
+    recs.add('🖼️ Implement lazy loading: <img loading="lazy" src="...">');
+    recs.add('🎨 Convert images to WebP format for ~30% smaller file sizes');
   }
-  if (issues.some(i => i.type === 'javascript')) {
-    recs.add('Implement code splitting and lazy loading');
-  }
-  if (issues.some(i => i.severity === 'critical')) {
-    recs.add('Focus on fixing critical issues first for biggest impact');
+  
+  if (issues.some(i => i.type === 'html' && i.message.includes('Large HTML'))) {
+    recs.add('📦 Enable HTML minification on your server (e.g., html-minifier-terser)');
   }
 
+  // If NO issues found at all
   if (recs.size === 0) {
-    recs.add('Your website looks well optimized!');
+    recs.add('✅ Your website looks well optimized!');
+    recs.add('📊 Continue monitoring performance metrics regularly');
   }
 
-  return Array.from(recs).slice(0, 6);
+  return Array.from(recs).slice(0, 8);
 }
 
-// function generateRecommendations(issues: DetailedIssue[]): string[] {
-//   const recommendations = new Set<string>();
-
-//   for (const issue of issues) {
-//     if (issue.severity === 'critical') {
-//       recommendations.add(issue.recommendation);
-//     }
-//   }
-
-//   if (issues.filter((i) => i.type === 'image').length > 0) {
-//     recommendations.add('Consider using a CDN with automatic image optimization');
-//     recommendations.add('Implement responsive images with srcset');
-//   }
-
-//   if (issues.filter((i) => i.type === 'javascript').length > 0) {
-//     recommendations.add('Implement code splitting and route-based lazy loading');
-//     recommendations.add('Remove unused dependencies and implement tree shaking');
-//   }
-
-//   if (issues.filter((i) => i.type === 'css').length > 0) {
-//     recommendations.add('Use CSS minification and remove unused CSS rules');
-//     recommendations.add('Consider using CSS-in-JS or utility-first CSS frameworks');
-//   }
-
-//   if (recommendations.size === 0) {
-//     recommendations.add('Great job! Your website appears to be well optimized');
-//     recommendations.add('Continue monitoring performance metrics regularly');
-//   }
-
-//   return Array.from(recommendations).slice(0, 5);
-// }
-
-
-// Keep your existing runBackendAnalysis function (it's fine as is)
+// 
 export const runBackendAnalysis = async (endpoint: string) => {
-  // ... (your existing backend code - no changes needed)
+  // 
   const issues: DetailedIssue[] = [];
   const startTime = Date.now();
 
